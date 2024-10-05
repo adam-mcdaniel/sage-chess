@@ -128,3 +128,8 @@ These functions will automatically be compiled in when you compile the resulting
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+<!-- About the author -->
+## ✍️ Author
+
+[I'm currently a PhD student at the University of Tennessee, Knoxville](https://adam-mcdaniel.net). I like to make things, especially programming languages. I've written [other](https://github.com/adam-mcdaniel/chess-engine) [engines](https://github.com/adam-mcdaniel/capitalist-chess) before, but this is my first in my own language. I hope you enjoy it!
