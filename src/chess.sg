@@ -1360,7 +1360,7 @@ impl Board {
 
     fun get_best_move(&self): Move {
         let mut eval_count = 0;
-        let mut result = best_move(self, 2.0, 3.0, &mut eval_count);
+        let mut result = best_move(self, 2.3, 3.0, &mut eval_count);
 
         if eval_count < 20000 {
             result = best_move(self, 2.0, 4.0, &mut eval_count);
