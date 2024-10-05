@@ -1,0 +1,1458 @@
+from std.fallible import Option;
+from std.collections import Vec;
+
+extern fun count_bits(x: Int): Int;
+extern fun get_time(): Int;
+
+let static mut SEED: Int = 0x12345;
+
+fun seed(n: Int) {
+    SEED = n;
+}
+
+fun rand(low: Int, high: Int): Int {
+    SEED = (SEED * 1103515245 + 12345) & 0x7FFFFFFF;
+    return low + SEED % (high - low);
+}
+
+fun coinflip(): Bool {
+    return rand(0, 2) == 0;
+}
+
+fun weighted_coinflip(percent_chance_to_be_true: Float): Bool {
+    return rand(0, 1000) < percent_chance_to_be_true * 1000;
+}
+
+fun minimax(board: &Board, depth: Float, mut alpha: Int, mut beta: Int, is_maximizing: Bool, getting_move_for: Color, eval_count: &mut Int): Int {
+    if depth < 0.01 {
+        *eval_count += 1;
+        return board.score(getting_move_for);
+    } else if depth < 1.0 && !weighted_coinflip(depth) {
+        *eval_count += 1;
+        return board.score(getting_move_for);
+    }
+
+    let mut moves = board.legal_moves();
+
+    let mut max_eval = -1000000000000;
+    let mut min_eval = 1000000000000;
+    for let mut i=0; i<moves.len(); i+=1; {
+        let mut new_board = *board;
+        let move = *moves.get(i);
+        new_board.move(move);
+        new_board.current_turn = new_board.current_turn.opposite();
+        let eval = minimax(&new_board, depth - 1, alpha, beta, !is_maximizing, getting_move_for, eval_count);
+
+        if is_maximizing {
+            if eval > max_eval {
+                max_eval = eval;
+            }
+
+            if max_eval > alpha {
+                alpha = eval;
+            }
+        } else {
+            if eval < min_eval {
+                min_eval = eval;
+            }
+
+            if min_eval < beta {
+                beta = min_eval;
+            }
+        }
+
+        if beta < alpha {
+            if is_maximizing {
+                return max_eval;
+            } else {
+                return min_eval;
+            }
+        }
+    }
+
+    if moves.len() == 0 {
+        return board.score(getting_move_for);
+    }
+
+    if is_maximizing {
+        return max_eval;
+    } else {
+        return min_eval;
+    }
+}
+
+fun best_move(board: &Board, base_depth: Float, thinking_cap_depth: Float, eval_count: &mut Int): Move {
+    println("Getting best move with base depth ", base_depth, " and thinking cap depth ", thinking_cap_depth);
+    let start = get_time();
+    let color = board.current_turn;
+    let mut result = Option<Move> of Nothing;
+    let mut best_score = -1000000000000;
+    let mut moves = board.legal_moves();
+
+    // First find the top best moves
+    const TRIALS = 4;
+    let mut best_moves: [Option<Move> * TRIALS] = [Option<Move> of Nothing] * TRIALS;
+    let mut best_scores: [Int * TRIALS] = [-1000000000000] * TRIALS;
+    for let mut i=0; i<moves.len(); i+=1; {
+        let mut new_board = *board;
+        let move = *moves.get(i);
+        new_board.move(move);
+
+        new_board.current_turn = new_board.current_turn.opposite();
+        let score = minimax(&new_board, base_depth, -1000000000000, 1000000000000, False, color, eval_count);
+        let mut has_replaced = False;
+        for let mut j=0; j<TRIALS && !has_replaced; j+=1; {
+            if best_moves[j].is_none() || score > best_scores[j] {
+                for let mut k=TRIALS-1; k>j; k-=1; {
+                    best_moves[k] = best_moves[k - 1];
+                    best_scores[k] = best_scores[k - 1];
+                }
+                best_moves[j] = Option<Move> of Some(move);
+                best_scores[j] = score;
+                has_replaced = True;
+            }
+        }
+    }
+
+    // Now find the best move from the best 3, but with a higher depth
+    println("Reconsidering:");
+    for let mut i=0; i<TRIALS; i+=1; {
+        best_moves[i].unwrap().print();
+        println(", score: ", best_scores[i]);
+        if best_scores[i] > best_score {
+            best_score = best_scores[i];
+            result = best_moves[i];
+        }
+    }
+
+    if thinking_cap_depth > base_depth {
+        // println("Thinking...");
+        for let mut i=0; i<TRIALS; i+=1; {
+            let mut move = best_moves[i].unwrap();
+            let mut new_board = *board;
+            new_board.move(move);
+            new_board.current_turn = new_board.current_turn.opposite();
+            let score = minimax(&new_board, thinking_cap_depth, -1000000000000, 1000000000000, False, color, eval_count);
+            // move.print();
+            // println(", score: ", score);
+            if score > best_score {
+                best_score = score;
+                result = Option<Move> of Some(move);
+            }
+        }
+    }
+
+    let end = get_time();
+    let elapsed_us = end - start;
+    let elapsed_secs = elapsed_us as Float / 1000000.0;
+
+    // if eval_count < 30000 {
+    //     println("Evaluated only ", eval_count, " positions, not enough, retrying with higher depth");
+    //     return best_move(board, base_depth + 1, thinking_cap_depth + 1);
+    // }
+
+    println("Eval count: ", *eval_count, " in ", elapsed_secs, " seconds, ", (*eval_count) as Float / elapsed_secs, " evals/sec");
+    moves.drop();
+    return result.unwrap();
+}
+
+enum PieceType {
+    Pawn,
+    Knight,
+    Bishop,
+    Rook,
+    Queen,
+    King
+}
+
+impl PieceType {
+    fun as_char(self): Char {
+        match self {
+            of Pawn => 'P',
+            of Knight => 'N',
+            of Bishop => 'B',
+            of Rook => 'R',
+            of Queen => 'Q',
+            of King => 'K'
+        }
+    }
+}
+
+enum Color {
+    White,
+    Black
+}
+
+impl Color {
+    fun opposite(self): Color {
+        match self {
+            of White => Color of Black,
+            of Black => Color of White
+        }
+    }
+
+    fun forward(self): Int {
+        match self {
+            of White => 1,
+            of Black => -1
+        }
+    }
+}
+
+struct Piece {
+    piece: PieceType,
+    color: Color,
+    position: Position
+}
+
+impl Piece {
+    fun new(piece: PieceType, color: Color, position: Position): Piece {
+        return { piece=piece, color=color, position=position };
+    }
+
+    fun as_char(self): Char {
+        match self.color {
+            of White => {
+                match self.piece {
+                    of Pawn => 'P',
+                    of Knight => 'N',
+                    of Bishop => 'B',
+                    of Rook => 'R',
+                    of Queen => 'Q',
+                    of King => 'K'
+                }
+            },
+            of Black => {
+                match self.piece {
+                    of Pawn => 'p',
+                    of Knight => 'n',
+                    of Bishop => 'b',
+                    of Rook => 'r',
+                    of Queen => 'q',
+                    of King => 'k'
+                }
+            }
+        }
+    }
+}
+
+struct Position {
+    row: Int,
+    col: Int
+}
+
+impl Position {
+    const A1 = { row=0, col=0 };
+    const A2 = { row=1, col=0 };
+    const A3 = { row=2, col=0 };
+    const A4 = { row=3, col=0 };
+    const A5 = { row=4, col=0 };
+    const A6 = { row=5, col=0 };
+    const A7 = { row=6, col=0 };
+    const A8 = { row=7, col=0 };
+
+    const B1 = { row=0, col=1 };
+    const B2 = { row=1, col=1 };
+    const B3 = { row=2, col=1 };
+    const B4 = { row=3, col=1 };
+    const B5 = { row=4, col=1 };
+    const B6 = { row=5, col=1 };
+    const B7 = { row=6, col=1 };
+    const B8 = { row=7, col=1 };
+
+    const C1 = { row=0, col=2 };
+    const C2 = { row=1, col=2 };
+    const C3 = { row=2, col=2 };
+    const C4 = { row=3, col=2 };
+    const C5 = { row=4, col=2 };
+    const C6 = { row=5, col=2 };
+    const C7 = { row=6, col=2 };
+    const C8 = { row=7, col=2 };
+
+    const D1 = { row=0, col=3 };
+    const D2 = { row=1, col=3 };
+    const D3 = { row=2, col=3 };
+    const D4 = { row=3, col=3 };
+    const D5 = { row=4, col=3 };
+    const D6 = { row=5, col=3 };
+    const D7 = { row=6, col=3 };
+    const D8 = { row=7, col=3 };
+
+    const E1 = { row=0, col=4 };
+    const E2 = { row=1, col=4 };
+    const E3 = { row=2, col=4 };
+    const E4 = { row=3, col=4 };
+    const E5 = { row=4, col=4 };
+    const E6 = { row=5, col=4 };
+    const E7 = { row=6, col=4 };
+    const E8 = { row=7, col=4 };
+
+    const F1 = { row=0, col=5 };
+    const F2 = { row=1, col=5 };
+    const F3 = { row=2, col=5 };
+    const F4 = { row=3, col=5 };
+    const F5 = { row=4, col=5 };
+    const F6 = { row=5, col=5 };
+    const F7 = { row=6, col=5 };
+    const F8 = { row=7, col=5 };
+
+    const G1 = { row=0, col=6 };
+    const G2 = { row=1, col=6 };
+    const G3 = { row=2, col=6 };
+    const G4 = { row=3, col=6 };
+    const G5 = { row=4, col=6 };
+    const G6 = { row=5, col=6 };
+    const G7 = { row=6, col=6 };
+    const G8 = { row=7, col=6 };
+
+    const H1 = { row=0, col=7 };
+    const H2 = { row=1, col=7 };
+    const H3 = { row=2, col=7 };
+    const H4 = { row=3, col=7 };
+    const H5 = { row=4, col=7 };
+    const H6 = { row=5, col=7 };
+    const H7 = { row=6, col=7 };
+    const H8 = { row=7, col=7 };
+
+    fun new(row: Int, col: Int): Position {
+        return { row=row, col=col };
+    }
+
+    fun to(self, other: Position): Move {
+        return Move of Normal(self, other, Option<PieceType> of Nothing);
+    }
+
+    fun print(self) {
+        let {row, col} = self;
+        print((col + 65) as Char);
+        print((row + '1' as Int) as Char);
+    }
+
+    fun println(self) {
+        self.print();
+        println();
+    }
+}
+
+struct BitBoard {
+    board: Int
+}
+
+impl BitBoard {
+    fun default(): BitBoard {
+        return { board=0 };
+    }
+
+    fun from_bits(bits: Int): BitBoard {
+        return { board=bits };
+    }
+
+    fun weight(self, weights: [[Float * 8] * 8]): Float {
+        let mut result = 0.0;
+        for let mut row=0; row<8; row+=1; {
+            for let mut col=0; col<8; col+=1; {
+                if self.has_piece(row, col) {
+                    result += weights[7 - row][col];
+                }
+            }
+        }
+        return result;
+    }
+
+    fun moves(p: Piece): BitBoard {
+        let {row, col} = p.position;
+        // Create a bitboard with the possible moves of a piece at a given position
+        let mut board = BitBoard.default();
+        match p.piece {
+            of Pawn => {
+                // Pawns move forward
+                board.set_piece(row + p.color.forward(), col);
+            },
+
+            of Knight => {
+                // Knights move in an L shape
+                if row > 1 && col > 0 {
+                    board.set_piece(row - 2, col - 1);
+                }
+                if row > 1 && col < 7 {
+                    board.set_piece(row - 2, col + 1);
+                }
+                if row > 0 && col > 1 {
+                    board.set_piece(row - 1, col - 2);
+                }
+                if row > 0 && col < 6 {
+                    board.set_piece(row - 1, col + 2);
+                }
+                if row < 7 && col > 1 {
+                    board.set_piece(row + 1, col - 2);
+                }
+                if row < 7 && col < 6 {
+                    board.set_piece(row + 1, col + 2);
+                }
+                if row < 6 && col > 0 {
+                    board.set_piece(row + 2, col - 1);
+                }
+                if row < 6 && col < 7 {
+                    board.set_piece(row + 2, col + 1);
+                }
+            },
+
+            of Bishop => {
+                // Bishops move diagonally
+                for let mut i=1; i<8; i+=1; {
+                    if row + i < 8 && col + i < 8 {
+                        board.set_piece(row + i, col + i);
+                    }
+                    if row + i < 8 && col - i >= 0 {
+                        board.set_piece(row + i, col - i);
+                    }
+                    if row - i >= 0 && col + i < 8 {
+                        board.set_piece(row - i, col + i);
+                    }
+                    if row - i >= 0 && col - i >= 0 {
+                        board.set_piece(row - i, col - i);
+                    }
+                }
+            },
+
+            of Rook => {
+                // Rooks move orthogonally
+                for let mut i=1; i < 8; i+=1; {
+                    if row + i < 8 {
+                        board.set_piece(row + i, col);
+                    }
+                    if row - i >= 0 {
+                        board.set_piece(row - i, col);
+                    }
+                    if col + i < 8 {
+                        board.set_piece(row, col + i);
+                    }
+                    if col - i >= 0 {
+                        board.set_piece(row, col - i);
+                    }
+                }
+            },
+            
+            of Queen => {
+                // Queens move like bishops and rooks
+                let mut bishop = BitBoard.moves(Piece.new(PieceType of Bishop, p.color, p.position));
+                let mut rook = BitBoard.moves(Piece.new(PieceType of Rook, p.color, p.position));
+                return bishop.union(rook);
+            },
+
+            of King => {
+                // Kings move one square in any direction
+                if row > 0 {
+                    board.set_piece(row - 1, col);
+                    if col > 0 {
+                        board.set_piece(row - 1, col - 1);
+                    }
+                    if col < 7 {
+                        board.set_piece(row - 1, col + 1);
+                    }
+                }
+                if row < 7 {
+                    board.set_piece(row + 1, col);
+                    if col > 0 {
+                        board.set_piece(row + 1, col - 1);
+                    }
+                    if col < 7 {
+                        board.set_piece(row + 1, col + 1);
+                    }
+                }
+                if col > 0 {
+                    board.set_piece(row, col - 1);
+                }
+                if col < 7 {
+                    board.set_piece(row, col + 1);
+                }
+            }
+        }
+        return board;
+    }
+
+    fun attacks(p: Piece): BitBoard {
+        // Create a bitboard with the attack pattern of a piece at a given position
+        let {row, col} = p.position;
+        let mut board = BitBoard.default();
+        match p.piece {
+            of Pawn => {
+                // Pawns attack diagonally
+                if row > 0 && col > 0 {
+                    board.set_piece(row + p.color.forward(), col - 1);
+                }
+                if row > 0 && col < 7 {
+                    board.set_piece(row + p.color.forward(), col + 1);
+                }
+            },
+            other => {
+                // Other pieces attack the same way they move
+                return BitBoard.moves(p);
+            }
+        }
+
+        return board;
+    }
+
+    fun legal_moves(mut ally_pieces: BitBoard, mut enemy_pieces: BitBoard, p: Piece): BitBoard {
+        // Find all legal moves for a piece at a given position
+        match p.piece {
+            of Pawn => {
+                // Get the attack pattern of the pawn
+                let mut attacks = BitBoard.attacks(p);
+                // Check if either of the diagonal squares are occupied by an enemy piece
+                let mut result = attacks.intersection(enemy_pieces);
+                // Check if the square in front of the pawn is empty
+                let {row, col} = p.position;
+                if !(ally_pieces.has_piece(row + p.color.forward(), col) || enemy_pieces.has_piece(row + p.color.forward(), col)) {
+                    result = result.union(BitBoard.default().with_piece(row + p.color.forward(), col));
+                    // If the pawn is on its starting square, it can move two squares forward
+                    if (p.color == (Color of White) && row == 1) || (p.color == (Color of Black) && row == 6) {
+                        if !(ally_pieces.has_piece(row + 2 * p.color.forward(), col) || enemy_pieces.has_piece(row + 2 * p.color.forward(), col)) {
+                            result = result.union(BitBoard.default().with_piece(row + 2 * p.color.forward(), col));
+                        }
+                    }
+                }
+                return result;
+            },
+            of Knight => {
+                return BitBoard.moves(p).difference(ally_pieces);
+            },
+            of King => {
+                return BitBoard.moves(p).difference(ally_pieces);
+            },
+
+            of Bishop => {
+                let mut blocked = [False, False, False, False];
+                let mut result = BitBoard.default();
+                for let mut i=1; i<8; i+=1; {
+                    if !(blocked[0]) {
+                        let mut pos = Position.new(p.position.row + i, p.position.col + i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[0] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[0] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !(blocked[1]) {
+                        let mut pos = Position.new(p.position.row + i, p.position.col - i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[1] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[1] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !(blocked[2]) {
+                        let mut pos = Position.new(p.position.row - i, p.position.col + i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[2] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[2] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !(blocked[3]) {
+                        let mut pos = Position.new(p.position.row - i, p.position.col - i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[3] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[3] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+                }
+                return result;
+            },
+            of Rook => {
+                let mut blocked = [False, False, False, False];
+                let mut result = BitBoard.default();
+                for let mut i=1; i<8; i+=1; {
+                    if !blocked[0] {
+                        let mut pos = Position.new(p.position.row + i, p.position.col);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[0] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[0] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !blocked[1] {
+                        let mut pos = Position.new(p.position.row - i, p.position.col);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[1] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[1] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !blocked[2] {
+                        let mut pos = Position.new(p.position.row, p.position.col + i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[2] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[2] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+
+                    if !blocked[3] {
+                        let mut pos = Position.new(p.position.row, p.position.col - i);
+                        if enemy_pieces.has_piece(pos.row, pos.col) {
+                            blocked[3] = True;
+                            result = result.with_piece(pos.row, pos.col);
+                        } else if ally_pieces.has_piece(pos.row, pos.col) {
+                            blocked[3] = True;
+                        } else {
+                            result = result.with_piece(pos.row, pos.col);
+                        }
+                    }
+                }
+                return result;
+            },
+
+            of Queen => {
+                let mut bishop = BitBoard.legal_moves(ally_pieces, enemy_pieces, Piece.new(PieceType of Bishop, p.color, p.position));
+                let mut rook = BitBoard.legal_moves(ally_pieces, enemy_pieces, Piece.new(PieceType of Rook, p.color, p.position));
+                return bishop.union(rook);
+            },
+
+            other => {
+                return BitBoard.default();
+            }
+        }
+    }
+
+    fun legal_attacks(mut ally_pieces: BitBoard, enemy_pieces: BitBoard, p: Piece): BitBoard {
+        // Find all legal attacks for a piece at a given position
+        match p.piece {
+            of Pawn => {
+                // Get the attack pattern of the pawn
+                let mut attacks = BitBoard.attacks(p);
+                // Check if either of the diagonal squares are occupied by an enemy piece
+                let mut result = attacks.intersection(enemy_pieces);
+                return result;
+            },
+            other => {
+                // Other pieces attack the same way they move
+                return BitBoard.legal_moves(ally_pieces, enemy_pieces, p).intersection(enemy_pieces);
+            }
+        }
+    }
+
+    fun is_in_bounds(row: Int, col: Int): Bool {
+        return row >= 0 && row < 8 && col >= 0 && col < 8;
+    }
+    
+    fun has_piece(self, row: Int, col: Int): Bool {
+        return (self.board & (1 << (col + row * 8))) != 0;
+    }
+
+    fun set_piece(&mut self, row: Int, col: Int) {
+        if !BitBoard.is_in_bounds(row, col) {
+            return ();
+        }
+        self.board |= (1 << (col + row * 8));
+    }
+
+    fun with_piece(self, row: Int, col: Int): BitBoard {
+        if !BitBoard.is_in_bounds(row, col) {
+            return self;
+        }
+        return { board=self.board | (1 << (col + row * 8)) };
+    }
+
+    fun without_piece(self, row: Int, col: Int): BitBoard {
+        if !BitBoard.is_in_bounds(row, col) {
+            return self;
+        }
+        return { board=self.board & ~(1 << (col + row * 8)) };
+    }
+
+    fun union(self, other: BitBoard): BitBoard {
+        return { board=self.board | other.board };
+    }
+
+    fun intersection(self, other: BitBoard): BitBoard {
+        return { board=self.board & other.board };
+    }
+
+    fun difference(self, other: BitBoard): BitBoard {
+        return { board=self.board & ~other.board };
+    }
+
+    fun xor(self, other: BitBoard): BitBoard {
+        return { board=self.board ^ other.board };
+    }
+
+    fun count(self): Int {
+        return count_bits(self.board);
+    }
+
+    fun is_empty(self): Bool {
+        return self.board == 0;
+    }
+
+    fun is_subset(self, other: BitBoard): Bool {
+        return (self.board & other.board) == self.board;
+    }
+
+    fun is_superset(self, other: BitBoard): Bool {
+        return (self.board & other.board) == other.board;
+    }
+
+    fun is_disjoint(self, other: BitBoard): Bool {
+        return (self.board & other.board) == 0;
+    }
+
+    fun is_equal(self, other: BitBoard): Bool {
+        return self.board == other.board;
+    }
+
+    fun is_not_equal(self, other: BitBoard): Bool {
+        return self.board != other.board;
+    }
+
+    fun is_strict_subset(self, other: BitBoard): Bool {
+        return self.is_subset(other) && self.is_not_equal(other);
+    }
+
+    fun is_strict_superset(self, other: BitBoard): Bool {
+        return self.is_superset(other) && self.is_not_equal(other);
+    }
+
+    fun complement(self): BitBoard {
+        return { board=~self.board };
+    }
+
+    fun print(self) {
+        for let mut row=7; row>=0; row-=1; {
+            for let mut col=0; col<8; col+=1; {
+                if self.has_piece(row, col) {
+                    print("X")
+                } else {
+                    print(".")
+                }
+            }
+            println()
+        }
+    }
+
+    fun println(self) {
+        self.print();
+        println();
+    }
+    
+    fun scan_legal_moves(mut self, ally_pieces: BitBoard, enemy_pieces: BitBoard, piece: PieceType, color: Color): BitBoard {
+        // Apply the legal moves function to every piece of a given type
+        let count = self.count();
+        let mut result = BitBoard.default();
+        for let mut i=0; i<count; i+=1; {
+            let mut row = 0;
+            let mut col = 0;
+            let mut b = self.board;
+            while b > 0 {
+                if b & 1 {
+                    let mut p = Piece.new(piece, color, Position.new(row, col));
+                    let mut moves = BitBoard.legal_moves(ally_pieces, enemy_pieces, p);
+                    result = result.union(moves);
+                }
+                b /= 2;
+                col += 1;
+                if col == 8 {
+                    col = 0;
+                    row += 1;
+                }
+            }
+        }
+
+        return result;
+    }
+    
+    fun scan_legal_attacks(mut self, ally_pieces: BitBoard, enemy_pieces: BitBoard, piece: PieceType, color: Color): BitBoard {
+        // Apply the legal moves function to every piece of a given type
+        let count = self.count();
+        let mut result = BitBoard.default();
+        for let mut i=0; i<count; i+=1; {
+            let mut row = 0;
+            let mut col = 0;
+            let mut b = self.board;
+            while b > 0 {
+                if b & 1 {
+                    let mut p = Piece.new(piece, color, Position.new(row, col));
+                    let mut moves = BitBoard.legal_attacks(ally_pieces, enemy_pieces, p);
+                    result = result.union(moves);
+                }
+                b /= 2;
+                col += 1;
+                if col == 8 {
+                    col = 0;
+                    row += 1;
+                }
+            }
+        }
+
+        return result;
+    }
+}
+
+struct CastlingRights {
+    white_king_side: Bool,
+    white_queen_side: Bool,
+    black_king_side: Bool,
+    black_queen_side: Bool
+}
+
+impl CastlingRights {
+    fun default(): CastlingRights {
+        return { white_king_side=True, white_queen_side=True, black_king_side=True, black_queen_side=True };
+    }
+
+    fun empty(): CastlingRights {
+        return { white_king_side=False, white_queen_side=False, black_king_side=False, black_queen_side=False };
+    }
+}
+
+enum Move {
+    Normal(Position, Position, Option<PieceType>),
+    CastleKingSide,
+    CastleQueenSide,
+    Resign
+}
+
+impl Move {
+    fun with_promotion(self, promotion: PieceType): Move {
+        match self {
+            of Normal(src, dest, _) => {
+                return Move of Normal(src, dest, Option<PieceType> of Some(promotion));
+            },
+            other => {
+                return other;
+            }
+        }
+    }
+
+    fun print(self) {
+        match self {
+            of Normal(src, dest, promotion) => {
+                src.print();
+                dest.print();
+                match promotion {
+                    of Some(piece) => {
+                        print(piece.as_char());
+                    },
+                    of Nothing => {}
+                }
+            },
+            of CastleKingSide => {
+                print("O-O");
+            },
+            of CastleQueenSide => {
+                print("O-O-O");
+            },
+            of Resign => {
+                print("Resign");
+            }
+        }
+    }
+
+    fun println(self) {
+        self.print();
+        println();
+    }
+}
+
+struct Board {
+    current_turn: Color,
+    
+    white_pawns: BitBoard,
+    white_knights: BitBoard,
+    white_bishops: BitBoard,
+    white_rooks: BitBoard,
+    white_queens: BitBoard,
+    white_king: BitBoard,
+
+    black_pawns: BitBoard,
+    black_knights: BitBoard,
+    black_bishops: BitBoard,
+    black_rooks: BitBoard,
+    black_queens: BitBoard,
+    black_king: BitBoard,
+
+    castling_rights: CastlingRights,
+    en_passant: Option<Position>,
+    halfmove_clock: Int,
+}
+
+impl Board {
+    fun default(): Board {
+        let mut result = {
+            current_turn=Color of White,
+
+            white_pawns=BitBoard.default().with_piece(1, 0).with_piece(1, 1).with_piece(1, 2).with_piece(1, 3).with_piece(1, 4).with_piece(1, 5).with_piece(1, 6).with_piece(1, 7),
+            white_knights=BitBoard.default().with_piece(0, 1).with_piece(0, 6),
+            white_bishops=BitBoard.default().with_piece(0, 2).with_piece(0, 5),
+            white_rooks=BitBoard.default().with_piece(0, 0).with_piece(0, 7),
+            white_queens=BitBoard.default().with_piece(0, 3),
+            white_king=BitBoard.default().with_piece(0, 4),
+
+            black_pawns=BitBoard.default().with_piece(6, 0).with_piece(6, 1).with_piece(6, 2).with_piece(6, 3).with_piece(6, 4).with_piece(6, 5).with_piece(6, 6).with_piece(6, 7),
+            black_knights=BitBoard.default().with_piece(7, 1).with_piece(7, 6),
+            black_bishops=BitBoard.default().with_piece(7, 2).with_piece(7, 5),
+            black_rooks=BitBoard.default().with_piece(7, 0).with_piece(7, 7),
+            black_queens=BitBoard.default().with_piece(7, 3),
+            black_king=BitBoard.default().with_piece(7, 4),
+
+            castling_rights=CastlingRights.default(),
+            en_passant=Option<Position> of Nothing,
+            halfmove_clock=0
+        };
+
+        result
+    }
+
+    fun turn(&mut self, m: Move) {
+        self.move(m);
+        self.current_turn = self.current_turn.opposite();
+    }
+
+    fun empty(): Board {
+        let mut result = {
+            current_turn=Color of White,
+
+            white_pawns=BitBoard.default(),
+            white_knights=BitBoard.default(),
+            white_bishops=BitBoard.default(),
+            white_rooks=BitBoard.default(),
+            white_queens=BitBoard.default(),
+            white_king=BitBoard.default(),
+
+            black_pawns=BitBoard.default(),
+            black_knights=BitBoard.default(),
+            black_bishops=BitBoard.default(),
+            black_rooks=BitBoard.default(),
+            black_queens=BitBoard.default(),
+            black_king=BitBoard.default(),
+
+            castling_rights=CastlingRights.default(),
+            en_passant=Option<Position> of Nothing,
+            halfmove_clock=0
+        };
+
+        result
+    }
+
+    fun from_fen(mut fen: &Char): Board {
+        fun next_char(fen: &Char): &Char {
+            return &(fen[1]);
+        }
+
+        fun skip_whitespace(mut fen: &Char): &Char {
+            while *fen == ' ' {
+                fen = next_char(fen);
+            }
+            return fen;
+        }
+
+        let mut result = Board.empty();
+
+        fen = skip_whitespace(fen);
+        let mut row = 7;
+        let mut col = 0;
+        let mut parsed = 0;
+        while parsed < 64 {
+            let mut c = *fen;
+            fen = skip_whitespace(fen);
+            match c {
+                'P' => {result.white_pawns = result.white_pawns.with_piece(row, col); col += 1; parsed += 1;},
+                'N' => {result.white_knights = result.white_knights.with_piece(row, col); col += 1; parsed += 1;},
+                'B' => {result.white_bishops = result.white_bishops.with_piece(row, col); col += 1; parsed += 1;},
+                'R' => {result.white_rooks = result.white_rooks.with_piece(row, col); col += 1; parsed += 1;},
+                'Q' => {result.white_queens = result.white_queens.with_piece(row, col); col += 1; parsed += 1;},
+                'K' => {result.white_king = result.white_king.with_piece(row, col); col += 1; parsed += 1;},
+                'p' => {result.black_pawns = result.black_pawns.with_piece(row, col); col += 1; parsed += 1;},
+                'n' => {result.black_knights = result.black_knights.with_piece(row, col); col += 1; parsed += 1;},
+                'b' => {result.black_bishops = result.black_bishops.with_piece(row, col); col += 1; parsed += 1;},
+                'r' => {result.black_rooks = result.black_rooks.with_piece(row, col); col += 1; parsed += 1;},
+                'q' => {result.black_queens = result.black_queens.with_piece(row, col); col += 1; parsed += 1;},
+                'k' => {result.black_king = result.black_king.with_piece(row, col); col += 1; parsed += 1;},
+                '\/' => {row -= 1; col = 0;},
+                '1' => {col += 1; parsed += 1;},
+                '2' => {col += 2; parsed += 2;},
+                '3' => {col += 3; parsed += 3;},
+                '4' => {col += 4; parsed += 4;},
+                '5' => {col += 5; parsed += 5;},
+                '6' => {col += 6; parsed += 6;},
+                '7' => {col += 7; parsed += 7;},
+                '8' => {col += 8; parsed += 8;},
+                _ => println("Unknown character in FEN string: ", c)
+            }
+
+            fen = next_char(fen);
+        }
+
+        // Parse the active color
+        fen = skip_whitespace(fen);
+        match *fen {
+            'w' => {result.current_turn = Color of White; fen = next_char(fen);},
+            'b' => {result.current_turn = Color of Black; fen = next_char(fen);},
+            _ => println("Unknown character in FEN string: ", *fen)
+        }
+
+        // Parse the castling rights
+        // If there are no castling rights, the string is "-"
+        fen = skip_whitespace(fen);
+        if *fen == '-' {
+            result.castling_rights = CastlingRights.default();
+        } else {
+            result.castling_rights = CastlingRights.empty();
+            while *fen != ' ' {
+                match *fen {
+                    'K' => {result.castling_rights.white_king_side = True;},
+                    'Q' => {result.castling_rights.white_queen_side = True;},
+                    'k' => {result.castling_rights.black_king_side = True;},
+                    'q' => {result.castling_rights.black_queen_side = True;},
+                    _ => println("Unknown character in FEN string: {}", *fen)
+                }
+                fen = next_char(fen);
+            }
+        }
+
+        // Parse the en passant square
+        fen = skip_whitespace(fen);
+        if *fen == '-' {
+            result.en_passant = Option<Position> of Nothing;
+        } else {
+            let col = (fen[0] as Int) - ('a' as Int);
+            let row = (fen[1] as Int) - ('1' as Int);
+
+            result.en_passant = Option<Position> of Some(Position.new(row, col));
+        }
+
+        // Parse the halfmove clock
+        fen = skip_whitespace(fen);
+        let mut halfmove_clock = 0;
+        while *fen != ' ' {
+            halfmove_clock = halfmove_clock * 10 + (fen[0] as Int) - ('0' as Int);
+            fen = next_char(fen);
+        }
+        result.halfmove_clock = halfmove_clock;
+
+        result
+    }
+
+
+    fun get_all_pieces(&self, color: Color): BitBoard {
+        match color {
+            of White => {
+                return self.white_pawns.union(self.white_knights).union(self.white_bishops).union(self.white_rooks).union(self.white_queens).union(self.white_king);
+            },
+            of Black => {
+                return self.black_pawns.union(self.black_knights).union(self.black_bishops).union(self.black_rooks).union(self.black_queens).union(self.black_king);
+            }
+        }
+    }
+
+    fun legal_moves(&self): Vec<Move> {
+        let color = self.current_turn;
+        let (pawns, knights, bishops, rooks, queens, king) = match color {
+            of White => (self.white_pawns, self.white_knights, self.white_bishops, self.white_rooks, self.white_queens, self.white_king),
+            of Black => (self.black_pawns, self.black_knights, self.black_bishops, self.black_rooks, self.black_queens, self.black_king)
+        };
+
+        let mut ally_pieces = self.get_all_pieces(color);
+        let mut enemy_pieces = self.get_all_pieces(color.opposite());
+
+        let mut result = Vec.make<Move>();
+
+        fun generate_moves(moves: &mut Vec<Move>, board: BitBoard, src: Position) {
+            for let mut row=0; row<8; row+=1; {
+                for let mut col=0; col<8; col+=1; {
+                    if board.has_piece(row, col) {
+                        moves.push(src.to(Position.new(row, col)));
+                    }
+                }
+            }
+        }
+
+        // Generate pawn moves
+        for let mut row=0; row<8; row+=1; {
+            for let mut col=0; col<8; col+=1; {
+                match self.get_piece(Position.new(row, col)) {
+                    of Some(piece) => {
+                        if piece.color == color && piece.piece == (PieceType of Pawn) {
+                            // Add the en passant square as an enemy piece if it exists
+                            let en_passant_enemy = match self.en_passant {
+                                of Some(pos) => enemy_pieces.with_piece(pos.row, pos.col),
+                                of Nothing => enemy_pieces
+                            };
+                            let mut moves = BitBoard.legal_moves(ally_pieces, en_passant_enemy, piece);
+                            generate_moves(&mut result, moves, Position.new(row, col));
+                        } else if piece.color == color {
+                            let mut moves = BitBoard.legal_moves(ally_pieces, enemy_pieces, piece);
+                            generate_moves(&mut result, moves, Position.new(row, col));
+                        }
+                    },
+                    of Nothing => {}
+                }
+            }
+        }
+
+        // Check castling rights
+        if self.castling_rights.white_king_side && color == (Color of White) {
+            if self.white_king.has_piece(0, 4) && self.white_rooks.has_piece(0, 7) {
+                if !self.has_piece(Position.new(0, 5)) &&!self.has_piece(Position.new(0, 6)) {
+                    if !self.is_in_check(color) {
+                        result.push(Move of CastleKingSide);
+                    }
+                }
+            }
+        }
+
+        if self.castling_rights.white_queen_side && color == (Color of White) {
+            if self.white_king.has_piece(0, 4) && self.white_rooks.has_piece(0, 0) {
+                if !self.has_piece(Position.new(0, 1)) &&!self.has_piece(Position.new(0, 2)) &&!self.has_piece(Position.new(0, 3)) {
+                    if !self.is_in_check(color) {
+                        result.push(Move of CastleQueenSide);
+                    }
+                }
+            }
+        }
+
+        if self.castling_rights.black_king_side && color == (Color of Black) {
+            if self.black_king.has_piece(7, 4) && self.black_rooks.has_piece(7, 7) {
+                if !self.has_piece(Position.new(7, 5)) &&!self.has_piece(Position.new(7, 6)) {
+                    if !self.is_in_check(color) {
+                        result.push(Move of CastleKingSide);
+                    }
+                }
+            }
+        }
+
+        if self.castling_rights.black_queen_side && color == (Color of Black) {
+            if self.black_king.has_piece(7, 4) && self.black_rooks.has_piece(7, 0) {
+                if !self.has_piece(Position.new(7, 1)) &&!self.has_piece(Position.new(7, 2)) &&!self.has_piece(Position.new(7, 3)) {
+                    if !self.is_in_check(color) {
+                        result.push(Move of CastleQueenSide);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    fun move(&mut self, m: Move) {
+        match m {
+            of Normal(src, dest, promotion) => {
+                let mut piece = self.get_piece(src).unwrap();
+                self.remove_piece(src);
+                self.add_piece(Piece.new(piece.piece, piece.color, dest));
+
+                // Check to see if this is a pawn move that captures on the en passant square
+                if let of Some(en_passant) = self.en_passant {
+                    if piece.piece == (PieceType of Pawn) && dest.row == en_passant.row && dest.col == en_passant.col {
+                        let mut en_passant_capture = Position.new(dest.row + if piece.color == (Color of White) {-1} else {1}, dest.col);
+                        self.remove_piece(en_passant_capture);
+                    }
+                }
+
+                self.en_passant = Option<Position> of Nothing;
+                // Check for en passant
+                let adds_en_passant_square = match piece.piece {
+                    of Pawn => {
+                        // If is on last or first row, promote to queen
+                        if dest.row == 0 || dest.row == 7 {
+                            match promotion {
+                                of Some(piece) => {
+                                    self.add_piece(Piece.new(piece, self.current_turn, dest));
+                                },
+                                of Nothing => {
+                                    self.add_piece(Piece.new(PieceType of Queen, self.current_turn, dest));
+                                }
+                            }
+                        }
+
+                        if src.row == 1 && dest.row == 3 {
+                            self.en_passant = Option<Position> of Some(Position.new(2, src.col));
+                            True
+                        } else if src.row == 6 && dest.row == 4 {
+                            self.en_passant = Option<Position> of Some(Position.new(5, src.col));
+                            True
+                        } else {
+                            False
+                        }
+                    },
+                    _ => False
+                };
+
+                if adds_en_passant_square {
+                    self.en_passant = Option<Position> of Some(Position.new((src.row + dest.row) / 2, src.col));
+                }
+            },
+            of CastleKingSide => {
+                let mut king = if self.current_turn == (Color of White) {self.white_king} else {self.black_king};
+                let mut rook = if self.current_turn == (Color of White) {self.white_rooks} else {self.black_rooks};
+                let mut row = if self.current_turn == (Color of White) {0} else {7};
+                self.en_passant = Option<Position> of Nothing;
+                self.remove_piece(Position.new(row, 4));
+                self.remove_piece(Position.new(row, 7));
+                self.add_piece(Piece.new(PieceType of King, self.current_turn, Position.new(row, 6)));
+                self.add_piece(Piece.new(PieceType of Rook, self.current_turn, Position.new(row, 5)));
+            },
+            of CastleQueenSide => {
+                let mut king = if self.current_turn == (Color of White) {self.white_king} else {self.black_king};
+                let mut rook = if self.current_turn == (Color of White) {self.white_rooks} else {self.black_rooks};
+                let mut row = if self.current_turn == (Color of White) {0} else {7};
+                self.en_passant = Option<Position> of Nothing;
+                self.remove_piece(Position.new(row, 4));
+                self.remove_piece(Position.new(row, 0));
+                self.add_piece(Piece.new(PieceType of King, self.current_turn, Position.new(row, 2)));
+                self.add_piece(Piece.new(PieceType of Rook, self.current_turn, Position.new(row, 3)));
+            },
+            of Resign => {}
+        }
+    }
+
+    fun is_in_check(&self, color: Color): Bool {
+        let mut enemy_pieces = self.get_all_pieces(color);
+        let mut ally_pieces = self.get_all_pieces(if color == (Color of White) { (Color of Black) } else { (Color of White) });
+        let mut king = if color == (Color of White) {self.white_king} else {self.black_king};
+        return king.intersection(self.get_all_attacks(color.opposite())).is_not_equal(BitBoard.default());
+    }
+
+    fun get_all_attacks(&self, color: Color): BitBoard {
+        let mut result = BitBoard.default();
+        if color == (Color of White) {
+            let enemy_pieces = self.get_all_pieces(Color of Black);
+            let ally_pieces = self.get_all_pieces(Color of White);
+            result = result.union(self.white_pawns.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Pawn, color));
+            result = result.union(self.white_knights.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Knight, color));
+            result = result.union(self.white_bishops.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Bishop, color));
+            result = result.union(self.white_rooks.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Rook, color));
+            result = result.union(self.white_queens.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Queen, color));
+            result = result.union(self.white_king.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of King, color));
+        } else {
+            let enemy_pieces = self.get_all_pieces(Color of White);
+            let ally_pieces = self.get_all_pieces(Color of Black);
+            result = result.union(self.black_pawns.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Pawn, color));
+            result = result.union(self.black_knights.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Knight, color));
+            result = result.union(self.black_bishops.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Bishop, color));
+            result = result.union(self.black_rooks.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Rook, color));
+            result = result.union(self.black_queens.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of Queen, color));
+            result = result.union(self.black_king.scan_legal_attacks(ally_pieces, enemy_pieces, PieceType of King, color));
+        }
+        return result;
+    }
+
+    fun add_piece(&mut self, piece: Piece) {
+        self.remove_piece(piece.position);
+        match (piece.color, piece.piece) {
+            (of White, of Pawn) => {self.white_pawns = self.white_pawns.with_piece(piece.position.row, piece.position.col);},
+            (of White, of Knight) => {self.white_knights = self.white_knights.with_piece(piece.position.row, piece.position.col);},
+            (of White, of Bishop) => {self.white_bishops = self.white_bishops.with_piece(piece.position.row, piece.position.col);},
+            (of White, of Rook) => {self.white_rooks = self.white_rooks.with_piece(piece.position.row, piece.position.col);},
+            (of White, of Queen) => {self.white_queens = self.white_queens.with_piece(piece.position.row, piece.position.col);},
+            (of White, of King) => {self.white_king = self.white_king.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of Pawn) => {self.black_pawns = self.black_pawns.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of Knight) => {self.black_knights = self.black_knights.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of Bishop) => {self.black_bishops = self.black_bishops.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of Rook) => {self.black_rooks = self.black_rooks.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of Queen) => {self.black_queens = self.black_queens.with_piece(piece.position.row, piece.position.col);},
+            (of Black, of King) => {self.black_king = self.black_king.with_piece(piece.position.row, piece.position.col);},
+            _ => {}
+        }
+    }
+
+    fun remove_piece(&mut self, pos: Position) {
+        self.white_pawns = self.white_pawns.without_piece(pos.row, pos.col);
+        self.white_knights = self.white_knights.without_piece(pos.row, pos.col);
+        self.white_bishops = self.white_bishops.without_piece(pos.row, pos.col);
+        self.white_rooks = self.white_rooks.without_piece(pos.row, pos.col);
+        self.white_queens = self.white_queens.without_piece(pos.row, pos.col);
+        self.white_king = self.white_king.without_piece(pos.row, pos.col);
+
+        self.black_pawns = self.black_pawns.without_piece(pos.row, pos.col);
+        self.black_knights = self.black_knights.without_piece(pos.row, pos.col);
+        self.black_bishops = self.black_bishops.without_piece(pos.row, pos.col);
+        self.black_rooks = self.black_rooks.without_piece(pos.row, pos.col);
+        self.black_queens = self.black_queens.without_piece(pos.row, pos.col);
+        self.black_king = self.black_king.without_piece(pos.row, pos.col);
+    }
+
+    fun has_piece(&self, pos: Position): Bool {
+        return self.white_pawns.has_piece(pos.row, pos.col) || self.white_knights.has_piece(pos.row, pos.col) || self.white_bishops.has_piece(pos.row, pos.col) || self.white_rooks.has_piece(pos.row, pos.col) || self.white_queens.has_piece(pos.row, pos.col) || self.white_king.has_piece(pos.row, pos.col) || self.black_pawns.has_piece(pos.row, pos.col) || self.black_knights.has_piece(pos.row, pos.col) || self.black_bishops.has_piece(pos.row, pos.col) || self.black_rooks.has_piece(pos.row, pos.col) || self.black_queens.has_piece(pos.row, pos.col) || self.black_king.has_piece(pos.row, pos.col);
+    }
+
+    fun get_piece(self, pos: Position): Option<Piece> {
+        if self.white_pawns.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Pawn, Color of White, pos));
+        } else if self.white_knights.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Knight, Color of White, pos));
+        } else if self.white_bishops.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Bishop, Color of White, pos));
+        } else if self.white_rooks.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Rook, Color of White, pos));
+        } else if self.white_queens.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Queen, Color of White, pos));
+        } else if self.white_king.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of King, Color of White, pos));
+        } else if self.black_pawns.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Pawn, Color of Black, pos));
+        } else if self.black_knights.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Knight, Color of Black, pos));
+        } else if self.black_bishops.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Bishop, Color of Black, pos));
+        } else if self.black_rooks.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Rook, Color of Black, pos));
+        } else if self.black_queens.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of Queen, Color of Black, pos));
+        } else if self.black_king.has_piece(pos.row, pos.col) {
+            return Option<Piece> of Some(Piece.new(PieceType of King, Color of Black, pos));
+        } else {
+            return Option<Piece> of Nothing;
+        }
+    }
+
+    fun move_piece(&mut self, src: Position, dst: Position) {
+        if let of Some(piece) = self.get_piece(src) {
+            self.remove_piece(src);
+            self.add_piece(Piece.new(piece.piece, piece.color, dst));
+        }
+    }
+
+    fun material_score(&self): Int {
+        let mut score = 0;
+        score += self.white_pawns.count() * 1;
+        score += self.white_knights.count() * 3;
+        score += self.white_bishops.count() * 3;
+        score += self.white_rooks.count() * 5;
+        score += self.white_queens.count() * 9;
+
+        score -= self.black_pawns.count() * 1;
+        score -= self.black_knights.count() * 3;
+        score -= self.black_bishops.count() * 3;
+        score -= self.black_rooks.count() * 5;
+        score -= self.black_queens.count() * 9;
+
+        return score;
+    }
+
+    fun get_best_move(&self): Move {
+        let mut eval_count = 0;
+        let mut result = best_move(self, 2.0, 3.0, &mut eval_count);
+
+        if eval_count < 20000 {
+            result = best_move(self, 2.0, 4.0, &mut eval_count);
+            if eval_count < 30000 {
+                return best_move(self, 3.0, 5.0, &mut eval_count);
+            }
+        }
+
+        return result;
+    }
+
+    fun score(&self, color: Color): Int {
+        let mut white_score = 0;
+        white_score += self.white_pawns.count() * 10 + self.white_pawns.intersection(CENTER).count() * 2 - self.white_pawns.intersection(BORDER).count();
+        white_score += self.white_knights.count() * 30 + self.white_knights.intersection(CENTER).count() * 1 - self.white_knights.intersection(BORDER).count() * 2;
+        white_score += self.white_bishops.count() * 33 + self.white_bishops.intersection(BORDER).count() * 2;
+        white_score += self.white_rooks.count() * 50;
+        white_score += self.white_queens.count() * 90;
+        let white_kings = self.white_king.count();
+        if white_kings == 0 {
+            return match color {
+                of White => -1000000000,
+                of Black => 1000000000
+            };
+        }
+        white_score += white_kings * 10000 + self.white_king.intersection(CORNERS).count() * 2;
+
+        let mut black_score = 0;
+        black_score += self.black_pawns.count() * 10 + self.black_pawns.intersection(CENTER).count() * 2 - self.black_pawns.intersection(BORDER).count();
+        black_score += self.black_knights.count() * 30 + self.black_knights.intersection(CENTER).count() * 1 - self.black_knights.intersection(BORDER).count() * 2;
+        black_score += self.black_bishops.count() * 33 + self.black_bishops.intersection(BORDER).count() * 2;
+        black_score += self.black_rooks.count() * 50;
+        black_score += self.black_queens.count() * 90;
+        let black_kings = self.black_king.count();
+        if black_kings == 0 {
+            return match color {
+                of White => 1000000000,
+                of Black => -1000000000
+            };
+        }
+        black_score += black_kings * 10000 + self.black_king.intersection(CORNERS).count() * 2;
+
+        return match color {
+            of White => white_score - black_score,
+            of Black => black_score - white_score
+        };
+    }
+
+    fun print(self) {
+        for let mut row=7; row>=0; row-=1; {
+            print(row+1, "  ");
+            for let mut col=0; col<8; col+=1; {
+                if self.white_pawns.has_piece(row, col) {
+                    print("P")
+                } else if self.white_knights.has_piece(row, col) {
+                    print("N")
+                } else if self.white_bishops.has_piece(row, col) {
+                    print("B")
+                } else if self.white_rooks.has_piece(row, col) {
+                    print("R")
+                } else if self.white_queens.has_piece(row, col) {
+                    print("Q")
+                } else if self.white_king.has_piece(row, col) {
+                    print("K")
+                } else if self.black_pawns.has_piece(row, col) {
+                    print("p")
+                } else if self.black_knights.has_piece(row, col) {
+                    print("n")
+                } else if self.black_bishops.has_piece(row, col) {
+                    print("b")
+                } else if self.black_rooks.has_piece(row, col) {
+                    print("r")
+                } else if self.black_queens.has_piece(row, col) {
+                    print("q")
+                } else if self.black_king.has_piece(row, col) {
+                    print("k")
+                } else {
+                    print(".")
+                }
+            }
+            print("\n")
+        }
+        println();
+        println("   abcdefgh");
+    }
+
+    fun println(self) {
+        self.print();
+        println();
+    }
+}
+
+let static CENTER: BitBoard = BitBoard.from_bits(0x3c3c3c3c0000);
+let static BORDER: BitBoard = BitBoard.from_bits(0xff818181818181ff);
+let static CORNERS: BitBoard = BitBoard.from_bits(0xc3c300000000c3c3);

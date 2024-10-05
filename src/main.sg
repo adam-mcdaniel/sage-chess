@@ -1,0 +1,17 @@
+mod chess;
+from chess import *;
+
+fun main() {
+    let mut b = Board.from_fen(&"r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3");
+    b.println();
+    
+    for let mut j=0; j<100; j+=1; {
+        let move = b.get_best_move();
+        move.println();
+        b.turn(move);
+        b.println();
+        println("Score: ", b.material_score());
+    }
+}
+
+main();
