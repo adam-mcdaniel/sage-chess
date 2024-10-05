@@ -111,7 +111,7 @@ for let mut j=0; j<10; j+=1; {
 ```
 
 <!-- FFI header -->
-## 🤝 FFI
+## 🤝 Foreign Function Interface
 
 The chess engine uses two C functions: one to simplify bitboard operations, and the other to get the system time in order to print the time it took to calculate the best move. The C functions are defined in the `ffi.h` file. The functions are as follows:
 
@@ -130,6 +130,6 @@ These functions will automatically be compiled in when you compile the resulting
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 <!-- About the author -->
-## ✍️ Author
+## ✍️ About The Author
 
 [I'm currently a PhD student at the University of Tennessee, Knoxville](https://adam-mcdaniel.net). I like to make things, especially programming languages. I've written [other](https://github.com/adam-mcdaniel/chess-engine) [engines](https://github.com/adam-mcdaniel/capitalist-chess) before, but this is my first in my own language. I hope you enjoy it!
